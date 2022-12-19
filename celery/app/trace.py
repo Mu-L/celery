@@ -10,7 +10,7 @@ import time
 from collections import namedtuple
 from warnings import warn
 
-from billiard.einfo import ExceptionInfo
+from billiard.einfo import ExceptionInfo, ExceptionWithTraceback
 from kombu.exceptions import EncodeError
 from kombu.serialization import loads as loads_message
 from kombu.serialization import prepare_accept_content
@@ -20,16 +20,13 @@ from celery import current_app, group, signals, states
 from celery._state import _task_stack
 from celery.app.task import Context
 from celery.app.task import Task as BaseTask
-from celery.exceptions import (BackendGetMetaError, Ignore, InvalidTaskError,
-                               Reject, Retry)
+from celery.exceptions import BackendGetMetaError, Ignore, InvalidTaskError, Reject, Retry
 from celery.result import AsyncResult
 from celery.utils.log import get_logger
 from celery.utils.nodenames import gethostname
 from celery.utils.objects import mro_lookup
 from celery.utils.saferepr import saferepr
-from celery.utils.serialization import (get_pickleable_etype,
-                                        get_pickleable_exception,
-                                        get_pickled_exception)
+from celery.utils.serialization import get_pickleable_etype, get_pickleable_exception, get_pickled_exception
 
 # ## ---
 # This is the heart of the worker, the inner loop so to speak.
@@ -241,6 +238,8 @@ class TraceInfo:
 
     def _log_error(self, task, req, einfo):
         eobj = einfo.exception = get_pickled_exception(einfo.exception)
+        if isinstance(eobj, ExceptionWithTraceback):
+            eobj = einfo.exception = eobj.exc
         exception, traceback, exc_info, sargs, skwargs = (
             safe_repr(eobj),
             safe_str(einfo.traceback),
@@ -316,7 +315,7 @@ def build_tracer(name, task, loader=None, hostname=None, store_errors=True,
         :keyword request: Request dict.
 
     """
-    # noqa: C901
+
     # pylint: disable=too-many-statements
 
     # If the task doesn't define a custom __call__ method
@@ -325,7 +324,6 @@ def build_tracer(name, task, loader=None, hostname=None, store_errors=True,
     fun = task if task_has_custom(task, '__call__') else task.run
 
     loader = loader or app.loader
-    backend = task.backend
     ignore_result = task.ignore_result
     track_started = task.track_started
     track_started = not eager and (task.track_started and not ignore_result)
@@ -346,16 +344,15 @@ def build_tracer(name, task, loader=None, hostname=None, store_errors=True,
     loader_task_init = loader.on_task_init
     loader_cleanup = loader.on_process_cleanup
 
+    task_before_start = None
     task_on_success = None
     task_after_return = None
+    if task_has_custom(task, 'before_start'):
+        task_before_start = task.before_start
     if task_has_custom(task, 'on_success'):
         task_on_success = task.on_success
     if task_has_custom(task, 'after_return'):
         task_after_return = task.after_return
-
-    store_result = backend.store_result
-    mark_as_done = backend.mark_as_done
-    backend_cleanup = backend.process_cleanup
 
     pid = os.getpid()
 
@@ -374,7 +371,7 @@ def build_tracer(name, task, loader=None, hostname=None, store_errors=True,
     from celery import canvas
     signature = canvas.maybe_signature  # maybe_ does not clone if already
 
-    def on_error(request, exc, uuid, state=FAILURE, call_errbacks=True):
+    def on_error(request, exc, state=FAILURE, call_errbacks=True):
         if propagate:
             raise
         I = Info(state, exc)
@@ -440,13 +437,16 @@ def build_tracer(name, task, loader=None, hostname=None, store_errors=True,
                                 args=args, kwargs=kwargs)
                 loader_task_init(uuid, task)
                 if track_started:
-                    store_result(
+                    task.backend.store_result(
                         uuid, {'pid': pid, 'hostname': hostname}, STARTED,
                         request=task_request,
                     )
 
                 # -*- TRACE -*-
                 try:
+                    if task_before_start:
+                        task_before_start(uuid, args, kwargs)
+
                     R = retval = fun(*args, **kwargs)
                     state = SUCCESS
                 except Reject as exc:
@@ -461,10 +461,10 @@ def build_tracer(name, task, loader=None, hostname=None, store_errors=True,
                     traceback_clear(exc)
                 except Retry as exc:
                     I, R, state, retval = on_error(
-                        task_request, exc, uuid, RETRY, call_errbacks=False)
+                        task_request, exc, RETRY, call_errbacks=False)
                     traceback_clear(exc)
                 except Exception as exc:
-                    I, R, state, retval = on_error(task_request, exc, uuid)
+                    I, R, state, retval = on_error(task_request, exc)
                     traceback_clear(exc)
                 except BaseException:
                     raise
@@ -514,11 +514,11 @@ def build_tracer(name, task, loader=None, hostname=None, store_errors=True,
                                 parent_id=uuid, root_id=root_id,
                                 priority=task_priority
                             )
-                        mark_as_done(
+                        task.backend.mark_as_done(
                             uuid, retval, task_request, publish_result,
                         )
                     except EncodeError as exc:
-                        I, R, state, retval = on_error(task_request, exc, uuid)
+                        I, R, state, retval = on_error(task_request, exc)
                     else:
                         Rstr = saferepr(R, resultrepr_maxsize)
                         T = monotonic() - time_start
@@ -532,6 +532,8 @@ def build_tracer(name, task, loader=None, hostname=None, store_errors=True,
                                 'name': get_task_name(task_request, name),
                                 'return_value': Rstr,
                                 'runtime': T,
+                                'args': safe_repr(args),
+                                'kwargs': safe_repr(kwargs),
                             })
 
                 # -* POST *-
@@ -551,7 +553,7 @@ def build_tracer(name, task, loader=None, hostname=None, store_errors=True,
                     pop_request()
                     if not eager:
                         try:
-                            backend_cleanup()
+                            task.backend.process_cleanup()
                             loader_cleanup()
                         except (KeyboardInterrupt, SystemExit, MemoryError):
                             raise
@@ -566,7 +568,7 @@ def build_tracer(name, task, loader=None, hostname=None, store_errors=True,
                 raise
             R = report_internal_error(task, exc)
             if task_request is not None:
-                I, _, _, _ = on_error(task_request, exc, uuid)
+                I, _, _, _ = on_error(task_request, exc)
         return trace_ok_t(R, I, T, Rstr)
 
     return trace_task

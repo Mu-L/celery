@@ -106,19 +106,19 @@ beat schedule list.
     @app.task
     def test(arg):
         print(arg)
-        
+
     @app.task
     def add(x, y):
         z = x + y
-        print(z) 
+        print(z)
 
 
 
 Setting these up from within the :data:`~@on_after_configure` handler means
-that we'll not evaluate the app at module level when using ``test.s()``. Note that 
+that we'll not evaluate the app at module level when using ``test.s()``. Note that
 :data:`~@on_after_configure` is sent after the app is set up, so tasks outside the
-module where the app is declared (e.g. in a `tasks.py` file located by 
-:meth:`celery.Celery.autodiscover_tasks`) must use a later signal, such as 
+module where the app is declared (e.g. in a `tasks.py` file located by
+:meth:`celery.Celery.autodiscover_tasks`) must use a later signal, such as
 :data:`~@on_after_finalize`.
 
 The :meth:`~@add_periodic_task` function will add the entry to the
@@ -170,6 +170,10 @@ Available Fields
 
     The name of the task to execute.
 
+    Task names are described in the :ref:`task-names` section of the User Guide.
+    Note that this is not the import path of the task, even though the default
+    naming pattern is built like it is.
+
 * `schedule`
 
     The frequency of execution.
@@ -192,7 +196,7 @@ Available Fields
     Execution options (:class:`dict`).
 
     This can be any argument supported by
-    :meth:`~celery.task.base.Task.apply_async` --
+    :meth:`~celery.app.task.Task.apply_async` --
     `exchange`, `routing_key`, `expires`, and so on.
 
 * `relative`

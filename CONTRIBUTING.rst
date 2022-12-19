@@ -710,6 +710,20 @@ After building succeeds, the documentation is available at :file:`_build/html`.
 
 .. _contributing-verify:
 
+Build the documentation using Docker
+------------------------------------
+
+Build the documentation by running:
+
+.. code-block:: console
+
+    $ docker-compose -f docker/docker-compose.yml up --build docs
+
+The service will start a local docs server at ``:7000``. The server is using
+``sphinx-autobuild`` with the ``--watch`` option enabled, so you can live
+edit the documentation. Check the additional options and configs in
+:file:`docker/docker-compose.yml`
+
 Verifying your contribution
 ---------------------------
 
@@ -830,14 +844,13 @@ make it easier for the maintainers to accept your proposed changes:
       ``pytest -xv --cov=celery --cov-report=xml --cov-report term``.
       You can check the current test coverage here: https://codecov.io/gh/celery/celery
 
-- [ ] Run ``flake8`` against the code. The following commands are valid
+- [ ] Run ``pre-commit`` against the code. The following commands are valid
       and equivalent.:
 
       .. code-block:: console
 
-          $ flake8 -j 2 celery/ t/
-          $ make flakecheck
-          $ tox -e flake8
+          $ pre-commit run --all-files
+          $ tox -e lint
 
 - [ ]  Build api docs to make sure everything is OK. The following commands are valid
       and equivalent.:
@@ -1157,7 +1170,7 @@ that require third-party libraries must be added.
 
     .. code-block:: console
 
-        $ pip install -U requirements/pkgutils.txt
+        $ pip install -U -r requirements/pkgutils.txt
         $ make readme
 
 
@@ -1264,7 +1277,7 @@ Packages
 :CI: https://travis-ci.org/#!/celery/celery
 :Windows-CI: https://ci.appveyor.com/project/ask/celery
 :PyPI: :pypi:`celery`
-:docs: http://docs.celeryproject.org
+:docs: https://docs.celeryq.dev
 
 ``kombu``
 ---------
@@ -1363,7 +1376,7 @@ Deprecated
 
 :git: https://github.com/celery/django-celery
 :PyPI: :pypi:`django-celery`
-:docs: http://docs.celeryproject.org/en/latest/django
+:docs: https://docs.celeryq.dev/en/latest/django
 
 - ``Flask-Celery``
 
@@ -1474,11 +1487,11 @@ following:
 
 .. _`mailing-list`: https://groups.google.com/group/celery-users
 
-.. _`irc-channel`: http://docs.celeryproject.org/en/latest/getting-started/resources.html#irc
+.. _`irc-channel`: https://docs.celeryq.dev/en/latest/getting-started/resources.html#irc
 
-.. _`internals-guide`: http://docs.celeryproject.org/en/latest/internals/guide.html
+.. _`internals-guide`: https://docs.celeryq.dev/en/latest/internals/guide.html
 
-.. _`bundles`: http://docs.celeryproject.org/en/latest/getting-started/introduction.html#bundles
+.. _`bundles`: https://docs.celeryq.dev/en/latest/getting-started/introduction.html#bundles
 
-.. _`report an issue`: http://docs.celeryproject.org/en/latest/contributing.html#reporting-bugs
+.. _`report an issue`: https://docs.celeryq.dev/en/latest/contributing.html#reporting-bugs
 

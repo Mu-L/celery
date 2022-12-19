@@ -127,7 +127,7 @@ and prioritization, all described in the :ref:`Routing Guide
 <guide-routing>`.
 
 You can get a complete list of command-line arguments
-by passing in the :option:`--help <celery --help>` flag:
+by passing in the :option:`!--help` flag:
 
 .. code-block:: console
 
@@ -765,13 +765,6 @@ tasks, a compromise between throughput and fair scheduling.
 If you have strict fair scheduling requirements, or want to optimize
 for throughput then you should read the :ref:`Optimizing Guide
 <guide-optimizing>`.
-
-If you're using RabbitMQ then you can install the :pypi:`librabbitmq`
-module, an AMQP client implemented in C:
-
-.. code-block:: console
-
-    $ pip install librabbitmq
 
 What to do now?
 ===============

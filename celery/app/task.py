@@ -1,16 +1,15 @@
 """Task implementation: request context and the task base class."""
 import sys
 
-from billiard.einfo import ExceptionInfo
+from billiard.einfo import ExceptionInfo, ExceptionWithTraceback
 from kombu import serialization
 from kombu.exceptions import OperationalError
 from kombu.utils.uuid import uuid
 
 from celery import current_app, states
 from celery._state import _task_stack
-from celery.canvas import _chain, group, signature
-from celery.exceptions import (Ignore, ImproperlyConfigured,
-                               MaxRetriesExceededError, Reject, Retry)
+from celery.canvas import GroupStampingVisitor, _chain, group, signature
+from celery.exceptions import Ignore, ImproperlyConfigured, MaxRetriesExceededError, Reject, Retry
 from celery.local import class_property
 from celery.result import EagerResult, denied_join_result
 from celery.utils import abstract
@@ -85,16 +84,32 @@ class Context:
     loglevel = None
     origin = None
     parent_id = None
+    properties = None
     retries = 0
     reply_to = None
+    replaced_task_nesting = 0
     root_id = None
     shadow = None
     taskset = None   # compat alias to group
     timelimit = None
     utc = None
+    stamped_headers = None
+    stamps = None
 
     def __init__(self, *args, **kwargs):
         self.update(*args, **kwargs)
+        if self.headers is None:
+            self.headers = self._get_custom_headers(*args, **kwargs)
+
+    def _get_custom_headers(self, *args, **kwargs):
+        headers = {}
+        headers.update(*args, **kwargs)
+        celery_keys = {*Context.__dict__.keys(), 'lang', 'task', 'argsrepr', 'kwargsrepr'}
+        for key in celery_keys:
+            headers.pop(key, None)
+        if not headers:
+            return None
+        return headers
 
     def update(self, *args, **kwargs):
         return self.__dict__.update(*args, **kwargs)
@@ -127,6 +142,7 @@ class Context:
             'headers': self.headers,
             'retries': self.retries,
             'reply_to': self.reply_to,
+            'replaced_task_nesting': self.replaced_task_nesting,
             'origin': self.origin,
         }
 
@@ -236,7 +252,7 @@ class Task:
     track_started = None
 
     #: When enabled messages for this task will be acknowledged **after**
-    #: the task has been executed, and not *just before* (the
+    #: the task has been executed, and not *right before* (the
     #: default behavior).
     #:
     #: Please note that this means the task may be executed twice if the
@@ -602,7 +618,7 @@ class Task:
         request = self.request if request is None else request
         args = request.args if args is None else args
         kwargs = request.kwargs if kwargs is None else kwargs
-        options = request.as_execution_options()
+        options = {**request.as_execution_options(), **extra_options}
         delivery_info = request.delivery_info or {}
         priority = delivery_info.get('priority')
         if priority is not None:
@@ -637,7 +653,7 @@ class Task:
             ...         twitter.post_status_update(message)
             ...     except twitter.FailWhale as exc:
             ...         # Retry in 5 minutes.
-            ...         self.retry(countdown=60 * 5, exc=exc)
+            ...         raise self.retry(countdown=60 * 5, exc=exc)
 
         Note:
             Although the task will never return above as `retry` raises an
@@ -780,8 +796,14 @@ class Task:
                 'exchange': options.get('exchange'),
                 'routing_key': options.get('routing_key'),
                 'priority': options.get('priority'),
-            },
+            }
         }
+        if 'stamped_headers' in options:
+            request['stamped_headers'] = maybe_list(options['stamped_headers'])
+            request['stamps'] = {
+                header: maybe_list(options.get(header, [])) for header in request['stamped_headers']
+            }
+
         tb = None
         tracer = build_tracer(
             task.name, task, eager=True,
@@ -791,6 +813,8 @@ class Task:
         retval = ret.retval
         if isinstance(retval, ExceptionInfo):
             retval, tb = retval.exception, retval.traceback
+            if isinstance(retval, ExceptionWithTraceback):
+                retval = retval.exc
         if isinstance(retval, Retry) and retval.sig is not None:
             return retval.sig.apply(retries=retries + 1)
         state = states.SUCCESS if ret.info is None else ret.info.state
@@ -881,7 +905,7 @@ class Task:
         .. versionadded:: 4.0
 
         Arguments:
-            sig (~@Signature): signature to replace with.
+            sig (Signature): signature to replace with.
 
         Raises:
             ~@Ignore: This is always raised when called in asynchronous context.
@@ -915,23 +939,34 @@ class Task:
         # which would break previously constructed results objects.
         sig.freeze(self.request.id)
         # Ensure the important options from the original signature are retained
+        replaced_task_nesting = self.request.get('replaced_task_nesting', 0) + 1
         sig.set(
             chord=chord,
             group_id=self.request.group,
             group_index=self.request.group_index,
             root_id=self.request.root_id,
+            replaced_task_nesting=replaced_task_nesting
         )
         # If the task being replaced is part of a chain, we need to re-create
         # it with the replacement signature - these subsequent tasks will
         # retain their original task IDs as well
         for t in reversed(self.request.chain or []):
             sig |= signature(t, app=self.app)
-        # Finally, either apply or delay the new signature!
-        if self.request.is_eager:
-            return sig.apply().get()
-        else:
-            sig.delay()
-            raise Ignore('Replaced by new task')
+        # Stamping sig with parents groups
+        if self.request.stamps:
+            groups = self.request.stamps.get("groups")
+            sig.stamp(visitor=GroupStampingVisitor(groups=groups, stamped_headers=self.request.stamped_headers))
+            stamped_headers = self.request.stamped_headers.copy()
+            stamps = self.request.stamps.copy()
+            stamped_headers.extend(sig.options.get('stamped_headers', []))
+            stamps.update({
+                stamp: value
+                for stamp, value in sig.options.items() if stamp in sig.options.get('stamped_headers', [])
+            })
+            sig.options['stamped_headers'] = stamped_headers
+            sig.options.update(stamps)
+
+        return self.on_replace(sig)
 
     def add_to_chord(self, sig, lazy=False):
         """Add signature to the chord the current task is a member of.
@@ -941,7 +976,7 @@ class Task:
         Currently only supported by the Redis result backend.
 
         Arguments:
-            sig (~@Signature): Signature to extend chord with.
+            sig (Signature): Signature to extend chord with.
             lazy (bool): If enabled the new task won't actually be called,
                 and ``sig.delay()`` must be called manually.
         """
@@ -970,6 +1005,20 @@ class Task:
             task_id = self.request.id
         self.backend.store_result(
             task_id, meta, state, request=self.request, **kwargs)
+
+    def before_start(self, task_id, args, kwargs):
+        """Handler called before the task starts.
+
+        .. versionadded:: 5.2
+
+        Arguments:
+            task_id (str): Unique id of the task to execute.
+            args (Tuple): Original arguments for the task to execute.
+            kwargs (Dict): Original keyword arguments for the task to execute.
+
+        Returns:
+            None: The return value of this handler is ignored.
+        """
 
     def on_success(self, retval, task_id, args, kwargs):
         """Success handler.
@@ -1033,6 +1082,24 @@ class Task:
             None: The return value of this handler is ignored.
         """
 
+    def on_replace(self, sig):
+        """Handler called when the task is replaced.
+
+        Must return super().on_replace(sig) when overriding to ensure the task replacement
+        is properly handled.
+
+        .. versionadded:: 5.3
+
+        Arguments:
+            sig (Signature): signature to replace with.
+        """
+        # Finally, either apply or delay the new signature!
+        if self.request.is_eager:
+            return sig.apply().get()
+        else:
+            sig.delay()
+            raise Ignore('Replaced by new task')
+
     def add_trail(self, result):
         if self.trail:
             self.request.children.append(result)
@@ -1073,7 +1140,7 @@ class Task:
         return backend
 
     @backend.setter
-    def backend(self, value):  # noqa
+    def backend(self, value):
         self._backend = value
 
     @property
@@ -1081,4 +1148,4 @@ class Task:
         return self.__class__.__name__
 
 
-BaseTask = Task  # noqa: E305 XXX compat alias
+BaseTask = Task  # XXX compat alias

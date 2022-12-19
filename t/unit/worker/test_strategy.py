@@ -18,7 +18,7 @@ from celery.worker.strategy import hybrid_to_proto2, proto1_to_proto2
 
 class test_proto1_to_proto2:
 
-    def setup(self):
+    def setup_method(self):
         self.message = Mock(name='message')
         self.body = {
             'args': (1,),
@@ -58,7 +58,7 @@ class test_proto1_to_proto2:
 
 class test_default_strategy_proto2:
 
-    def setup(self):
+    def setup_method(self):
         @self.app.task(shared=False)
         def add(x, y):
             return x + y
@@ -191,7 +191,7 @@ class test_default_strategy_proto2:
             C()
         for record in caplog.records:
             if record.msg == custom_fmt:
-                assert set(record.args) == {"id", "name"}
+                assert set(record.args) == {"id", "name", "kwargs", "args"}
                 break
         else:
             raise ValueError("Expected message not in captured log records")
@@ -278,7 +278,7 @@ class test_custom_request_for_default_strategy(test_default_strategy_proto2):
 
         class MyRequest(Request):
             def __init__(self, *args, **kwargs):
-                Request.__init__(self, *args, **kwargs)
+                super().__init__(*args, **kwargs)
                 _MyRequest()
 
         class MyTask(Task):
@@ -301,7 +301,7 @@ class test_custom_request_for_default_strategy(test_default_strategy_proto2):
 
 class test_hybrid_to_proto2:
 
-    def setup(self):
+    def setup_method(self):
         self.message = Mock(name='message', headers={"custom": "header"})
         self.body = {
             'args': (1,),

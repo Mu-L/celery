@@ -1,14 +1,12 @@
 import collections
 
 import pytest
-import pytest_subtests  # noqa: F401
+import pytest_subtests
 from kombu.utils.functional import lazy
 
-from celery.utils.functional import (DummyContext, first, firstmethod,
-                                     fun_accepts_kwargs, fun_takes_argument,
-                                     head_from_fun, lookahead, maybe_list,
-                                     mlazy, padlist, regen, seq_concat_item,
-                                     seq_concat_seq)
+from celery.utils.functional import (DummyContext, first, firstmethod, fun_accepts_kwargs, fun_takes_argument,
+                                     head_from_fun, is_numeric_value, lookahead, maybe_list, mlazy, padlist, regen,
+                                     seq_concat_item, seq_concat_seq)
 
 
 def test_DummyContext():
@@ -279,7 +277,7 @@ class test_head_from_fun:
 
     def test_from_cls(self):
         class X:
-            def __call__(x, y, kwarg=1):  # noqa
+            def __call__(x, y, kwarg=1):
                 pass
 
         g = head_from_fun(X())
@@ -406,7 +404,7 @@ class test_fun_takes_argument:
 ])
 def test_seq_concat_seq(a, b, expected):
     res = seq_concat_seq(a, b)
-    assert type(res) is type(expected)  # noqa
+    assert type(res) is type(expected)
     assert res == expected
 
 
@@ -416,7 +414,7 @@ def test_seq_concat_seq(a, b, expected):
 ])
 def test_seq_concat_item(a, b, expected):
     res = seq_concat_item(a, b)
-    assert type(res) is type(expected)  # noqa
+    assert type(res) is type(expected)
     assert res == expected
 
 
@@ -473,3 +471,20 @@ class test_fun_accepts_kwargs:
     ])
     def test_rejects(self, fun):
         assert not fun_accepts_kwargs(fun)
+
+
+@pytest.mark.parametrize('value,expected', [
+    (5, True),
+    (5.0, True),
+    (0, True),
+    (0.0, True),
+    (True, False),
+    ('value', False),
+    ('5', False),
+    ('5.0', False),
+    (None, False),
+])
+def test_is_numeric_value(value, expected):
+    res = is_numeric_value(value)
+    assert type(res) is type(expected)
+    assert res == expected
